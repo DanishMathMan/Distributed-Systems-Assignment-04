@@ -1,0 +1,16 @@
+syntax = "proto3";
+option go_package = "Assignment-03/grpc/proto";
+
+message LamportMessage{
+  int64 Lamport_timestamp = 1;
+  int64 process_id = 2;
+}
+
+message Empty{}
+
+service Node {
+  //rpc Initialization(Empty) returns (Empty);
+  rpc Request(LamportMessage) returns (Empty);
+  rpc Reply(LamportMessage) returns (Empty);
+  
+}
