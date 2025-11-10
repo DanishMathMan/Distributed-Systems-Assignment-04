@@ -3,6 +3,7 @@ package main
 import (
 	proto "Distributed-Systems-Assignment-04/src/grpc"
 	queue "Distributed-Systems-Assignment-04/src/utility"
+	utility "Distributed-Systems-Assignment-04/src/utility"
 	"bufio"
 	"context"
 	"errors"
@@ -121,8 +122,19 @@ func (node *Node) Exit() {
 }
 func main() {
 	port := flag.Int64("port", 8080, "Input port for the server to start on. Note, port is also its id")
-	//id := flag.Int64("id", 0, "Id for the server to start on")
 	flag.Parse()
+
+	// implemented logger
+	err := os.Mkdir("NodeLogs", 0750)
+	if err != nil && !os.IsExist(err) {
+		log.Fatal(err)
+	}
+	f, err := os.OpenFile("NodeLogs/log_"+strconv.FormatInt(time.Now().Unix(), 10)+".json", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.SetFlags(0)
+	log.SetOutput(f)
 
 	node := CreateNodeServer(*port)
 	go node.StartServer(node.Id)
@@ -135,17 +147,15 @@ func main() {
 	}()
 
 	go func() {
-		//todo internal logic. probably put some time.wait statements
 		<-node.Start
 		for {
+			// TODO change >= to >
 			if len(node.OutClients) >= 1 {
 				time.Sleep(1 * time.Second)
 				node.Enter()
 			}
 		}
 	}()
-
-	//todo internal logic. probably put some time.wait statements
 
 	//TODO refactor
 	for {
@@ -190,6 +200,7 @@ func (node *Node) InputHandler() error {
 func (node *Node) CriticalSection() {
 	timestamp := node.LocalEvent()
 	fmt.Printf("In critical section with client [%v] at timestamp %v\n", node.Id, timestamp)
+	utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: node.Id}, true)
 	node.Exit()
 }
 
