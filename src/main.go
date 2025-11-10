@@ -10,17 +10,17 @@ import (
 
 func main() {
 	//make servers
-	server1 := &Node.NodeServer{
+	server1 := &Node.Node{
 		Id: 1, Timestamp: make(chan int64, 1), State: Node.RELEASED,
 	}
 	server1.Timestamp <- 0
 
-	server2 := &Node.NodeServer{
+	server2 := &Node.Node{
 		Id: 2, Timestamp: make(chan int64, 1), State: Node.RELEASED,
 	}
 	server2.Timestamp <- 0
 
-	server3 := &Node.NodeServer{
+	server3 := &Node.Node{
 		Id: 3, Timestamp: make(chan int64, 1), State: Node.RELEASED,
 	}
 	server3.Timestamp <- 0
