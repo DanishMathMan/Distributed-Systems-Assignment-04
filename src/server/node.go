@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -30,6 +31,7 @@ type Node struct {
 	State      State
 	Replies    map[int64]chan bool
 	Queue      queue.Queue
+	Start      chan bool
 }
 
 type State int
@@ -49,16 +51,20 @@ func (node *Node) Request(ctx context.Context, msg *proto.LamportMessage) (*prot
 	} else {
 		//timestamp when replying to the message i.e. on method return
 		timestamp = node.LocalEvent()
-		node.OutClients[msg.GetProcessId()].Reply(ctx, &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.Id})
+		_, err := node.OutClients[msg.GetProcessId()].Reply(ctx, &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.Id})
+		if err != nil {
+			log.Fatalln(err)
+			return nil, err
+		}
 	}
-	return nil, nil
+	return &proto.Empty{}, nil
 }
 
 // Reply is the logic that happens within the Node, when it receives a Reply rpc call. To be called within Request method
 func (node *Node) Reply(ctx context.Context, msg *proto.LamportMessage) (*proto.Empty, error) {
 	node.RemoteEvent(msg.LamportTimestamp)
 	node.Replies[msg.ProcessId] <- true
-	return nil, nil
+	return &proto.Empty{}, nil
 }
 
 /*
@@ -67,7 +73,7 @@ calling this rpc method to that server. If the server doesn't the rpc call to th
 that the port doesn't have a listening serve Node server.
 */
 func (node *Node) Ping(ctx context.Context, msg *proto.Empty) (*proto.Empty, error) {
-	return nil, nil
+	return &proto.Empty{}, nil
 }
 
 /*
@@ -81,7 +87,10 @@ func (node *Node) Enter() {
 	timestamp := node.LocalEvent()
 	msg := &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.Id} //the message to be sent
 	for _, client := range node.OutClients {
-		client.Request(context.Background(), msg)
+		_, err := client.Request(context.Background(), msg)
+		if err != nil {
+			return
+		}
 	}
 	//wait for n-1 replies
 	wg := sync.WaitGroup{}
@@ -111,14 +120,6 @@ func (node *Node) Exit() {
 	}
 }
 func main() {
-	//start server
-
-	//input of command
-
-	//-flag
-	//--flag   // double dashes are also permitted
-	//-flag=x
-
 	port := flag.Int64("port", 8080, "Input port for the server to start on. Note, port is also its id")
 	//id := flag.Int64("id", 0, "Id for the server to start on")
 	flag.Parse()
@@ -130,6 +131,17 @@ func main() {
 		err := node.InputHandler()
 		if err != nil {
 			log.Println(err)
+		}
+	}()
+
+	go func() {
+		//todo internal logic. probably put some time.wait statements
+		<-node.Start
+		for {
+			if len(node.OutClients) >= 1 {
+				time.Sleep(1 * time.Second)
+				node.Enter()
+			}
 		}
 	}()
 
@@ -145,6 +157,7 @@ func main() {
 func (node *Node) InputHandler() error {
 	//TODO connect to the other nodes
 	regex := regexp.MustCompile("(?:--connect|-c) *(?P<port>\\d{4})") //expect a four digit port number
+	regex2 := regexp.MustCompile("--start")
 
 	for {
 		reader := bufio.NewReader(os.Stdin)
@@ -154,10 +167,17 @@ func (node *Node) InputHandler() error {
 			continue
 		}
 		match := regex.FindStringSubmatch(msg)
-		if match == nil {
+		match2 := regex2.FindStringSubmatch(msg)
+		if match == nil && match2 == nil {
 			log.Println("Invalid input: " + strings.Split(msg, "\n")[0])
 			continue
 		}
+
+		if match2 != nil {
+			node.Start <- true
+			continue
+		}
+
 		port, _ := strconv.ParseInt(match[1], 10, 64)
 		err = node.ConnectToNodeServer(port)
 		if err != nil {
@@ -165,11 +185,11 @@ func (node *Node) InputHandler() error {
 			continue
 		}
 	}
-	return nil
 }
 
 func (node *Node) CriticalSection() {
-	fmt.Printf("In critical section with client [%v]", node.Id)
+	timestamp := node.LocalEvent()
+	fmt.Printf("In critical section with client [%v] at timestamp %v\n", node.Id, timestamp)
 	node.Exit()
 }
 
@@ -193,7 +213,8 @@ func CreateNodeServer(id int64) Node {
 		Timestamp:  make(chan int64, 1),
 		Replies:    make(map[int64]chan bool, 1),
 		State:      RELEASED,
-		Queue:      queue.Queue{}}
+		Queue:      queue.Queue{},
+		Start:      make(chan bool)}
 	out.Timestamp <- 0
 	return out
 }
@@ -216,6 +237,7 @@ func (node *Node) ConnectToNodeServer(port int64) error {
 		return err
 	}
 	node.OutClients[port] = client
+	node.Replies[port] = make(chan bool, 1)
 	return nil
 }
 
