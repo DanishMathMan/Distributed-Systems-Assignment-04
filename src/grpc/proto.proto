@@ -12,5 +12,5 @@ service Node {
   //rpc Initialization(Empty) returns (Empty);
   rpc Request(LamportMessage) returns (Empty);
   rpc Reply(LamportMessage) returns (Empty);
-  
+  rpc Ping(Empty) returns (Empty);
 }

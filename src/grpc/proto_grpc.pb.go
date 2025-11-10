@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	Node_Request_FullMethodName = "/Node/Request"
 	Node_Reply_FullMethodName   = "/Node/Reply"
+	Node_Ping_FullMethodName    = "/Node/Ping"
 )
 
 // NodeClient is the client API for Node service.
@@ -30,6 +31,7 @@ type NodeClient interface {
 	// rpc Initialization(Empty) returns (Empty);
 	Request(ctx context.Context, in *LamportMessage, opts ...grpc.CallOption) (*Empty, error)
 	Reply(ctx context.Context, in *LamportMessage, opts ...grpc.CallOption) (*Empty, error)
+	Ping(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 }
 
 type nodeClient struct {
@@ -60,6 +62,16 @@ func (c *nodeClient) Reply(ctx context.Context, in *LamportMessage, opts ...grpc
 	return out, nil
 }
 
+func (c *nodeClient) Ping(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, Node_Ping_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeServer is the server API for Node service.
 // All implementations must embed UnimplementedNodeServer
 // for forward compatibility.
@@ -67,6 +79,7 @@ type NodeServer interface {
 	// rpc Initialization(Empty) returns (Empty);
 	Request(context.Context, *LamportMessage) (*Empty, error)
 	Reply(context.Context, *LamportMessage) (*Empty, error)
+	Ping(context.Context, *Empty) (*Empty, error)
 	mustEmbedUnimplementedNodeServer()
 }
 
@@ -82,6 +95,9 @@ func (UnimplementedNodeServer) Request(context.Context, *LamportMessage) (*Empty
 }
 func (UnimplementedNodeServer) Reply(context.Context, *LamportMessage) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Reply not implemented")
+}
+func (UnimplementedNodeServer) Ping(context.Context, *Empty) (*Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Ping not implemented")
 }
 func (UnimplementedNodeServer) mustEmbedUnimplementedNodeServer() {}
 func (UnimplementedNodeServer) testEmbeddedByValue()              {}
@@ -140,6 +156,24 @@ func _Node_Reply_Handler(srv interface{}, ctx context.Context, dec func(interfac
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Node_Ping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServer).Ping(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Node_Ping_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServer).Ping(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Node_ServiceDesc is the grpc.ServiceDesc for Node service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -154,6 +188,10 @@ var Node_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Reply",
 			Handler:    _Node_Reply_Handler,
+		},
+		{
+			MethodName: "Ping",
+			Handler:    _Node_Ping_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

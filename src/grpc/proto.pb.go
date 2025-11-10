@@ -118,10 +118,11 @@ const file_src_grpc_proto_proto_rawDesc = "" +
 	"\x11Lamport_timestamp\x18\x01 \x01(\x03R\x10LamportTimestamp\x12\x1d\n" +
 	"\n" +
 	"process_id\x18\x02 \x01(\x03R\tprocessId\"\a\n" +
-	"\x05Empty2L\n" +
+	"\x05Empty2d\n" +
 	"\x04Node\x12\"\n" +
 	"\aRequest\x12\x0f.LamportMessage\x1a\x06.Empty\x12 \n" +
-	"\x05Reply\x12\x0f.LamportMessage\x1a\x06.EmptyB\x1aZ\x18Assignment-03/grpc/protob\x06proto3"
+	"\x05Reply\x12\x0f.LamportMessage\x1a\x06.Empty\x12\x16\n" +
+	"\x04Ping\x12\x06.Empty\x1a\x06.EmptyB\x1aZ\x18Assignment-03/grpc/protob\x06proto3"
 
 var (
 	file_src_grpc_proto_proto_rawDescOnce sync.Once
@@ -143,10 +144,12 @@ var file_src_grpc_proto_proto_goTypes = []any{
 var file_src_grpc_proto_proto_depIdxs = []int32{
 	0, // 0: Node.Request:input_type -> LamportMessage
 	0, // 1: Node.Reply:input_type -> LamportMessage
-	1, // 2: Node.Request:output_type -> Empty
-	1, // 3: Node.Reply:output_type -> Empty
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
+	1, // 2: Node.Ping:input_type -> Empty
+	1, // 3: Node.Request:output_type -> Empty
+	1, // 4: Node.Reply:output_type -> Empty
+	1, // 5: Node.Ping:output_type -> Empty
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name

@@ -5,16 +5,19 @@ import (
 	queue "Distributed-Systems-Assignment-04/src/utility"
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type Node struct {
@@ -58,6 +61,19 @@ func (node *Node) Reply(ctx context.Context, msg *proto.LamportMessage) (*proto.
 	return nil, nil
 }
 
+/*
+Ping exists to make sure that when the Node creates a new client connection, that the server it connects to exists by
+calling this rpc method to that server. If the server doesn't the rpc call to this method will return an error, indicating
+that the port doesn't have a listening serve Node server.
+*/
+func (node *Node) Ping(ctx context.Context, msg *proto.Empty) (*proto.Empty, error) {
+	return nil, nil
+}
+
+/*
+Enter is called when the Node wants to Access the critical section, calling the Request rpc to every other Node and awaiting
+a reply from each, before using the critical section.
+*/
 func (node *Node) Enter() {
 	node.State = WANTED
 	//timestamp the sending of request messages. Note all messages have the same timestamp as sending this bundle of
@@ -108,7 +124,7 @@ func main() {
 	flag.Parse()
 
 	node := CreateNodeServer(*port)
-
+	go node.StartServer(node.Id)
 	//do internal logic
 	go func() {
 		err := node.InputHandler()
@@ -128,18 +144,26 @@ func main() {
 // InputHandler is meant to be called as a go routine, which will handle all CLI inputs, such as connecting to other servers
 func (node *Node) InputHandler() error {
 	//TODO connect to the other nodes
-	//regex, _ := regexp.Compile(--connect *(?'port'\d{4})) //expect a four digit port number
+	regex := regexp.MustCompile("(?:--connect|-c) *(?P<port>\\d{4})") //expect a four digit port number
 
 	for {
 		reader := bufio.NewReader(os.Stdin)
 		msg, err := reader.ReadString('\n')
 		if err != nil {
-			return err
+			log.Println(err)
+			continue
 		}
-		if strings.Contains(msg, "--connect") {
-
+		match := regex.FindStringSubmatch(msg)
+		if match == nil {
+			log.Println("Invalid input: " + strings.Split(msg, "\n")[0])
+			continue
 		}
-
+		port, _ := strconv.ParseInt(match[1], 10, 64)
+		err = node.ConnectToNodeServer(port)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
 	}
 	return nil
 }
@@ -170,19 +194,29 @@ func CreateNodeServer(id int64) Node {
 		Replies:    make(map[int64]chan bool, 1),
 		State:      RELEASED,
 		Queue:      queue.Queue{}}
+	out.Timestamp <- 0
 	return out
 }
 
 // ConnectToNodeServer connects this Node to another Node by creating a new connection and client to that
 // Node's server
-func (node *Node) ConnectToNodeServer(port int64) {
+func (node *Node) ConnectToNodeServer(port int64) error {
+	if node.OutClients[port] != nil {
+		return errors.New("Already connected to port: " + strconv.FormatInt(port, 10))
+	}
+
 	node.LocalEvent()
-	conn, err := grpc.NewClient("localhost:" + strconv.FormatInt(port, 10))
+	conn, err := grpc.NewClient("localhost:"+strconv.FormatInt(port, 10), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("failed to connect: %v", err)
+		return err
 	}
 	client := proto.NewNodeClient(conn)
+	_, err = client.Ping(context.Background(), &proto.Empty{})
+	if err != nil {
+		return err
+	}
 	node.OutClients[port] = client
+	return nil
 }
 
 // LocalEvent updates the Timestamp by incrementing it by 1
