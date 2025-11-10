@@ -9,7 +9,6 @@ import (
 )
 
 func main() {
-	//make servers
 	server1 := &Node.Node{
 		Id: 1, Timestamp: make(chan int64, 1), State: Node.RELEASED,
 	}
@@ -25,7 +24,7 @@ func main() {
 	}
 	server3.Timestamp <- 0
 
-	//start servers
+	//start servers	TODO these are not individual processes
 	wg := sync.WaitGroup{}
 	wg.Go(func() {
 		server1.StartServer(8080)

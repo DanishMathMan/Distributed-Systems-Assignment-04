@@ -1,11 +1,17 @@
-package node
+package main
 
 import (
 	proto "Distributed-Systems-Assignment-04/src/grpc"
+	queue "Distributed-Systems-Assignment-04/src/utility"
+	"bufio"
 	"context"
+	"flag"
+	"fmt"
 	"log"
 	"net"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -20,7 +26,7 @@ type Node struct {
 	Id         int64
 	State      State
 	Replies    map[int64]chan bool
-	//TODO Queue
+	Queue      queue.Queue
 }
 
 type State int
@@ -32,64 +38,124 @@ const (
 )
 
 // Request is the logic that happens within Node, when it receives a Request rpc call. To be called within Enter method
-func (server *Node) Request(ctx context.Context, msg *proto.LamportMessage) (*proto.Empty, error) {
+func (node *Node) Request(ctx context.Context, msg *proto.LamportMessage) (*proto.Empty, error) {
 	//timestamp at the receival of a request
-	timestamp := server.RemoteEvent(msg.LamportTimestamp)
-	if server.State == HELD || (server.State == WANTED && !server.HasHigherPriority(msg)) {
-		//TODO enqueue
+	timestamp := node.RemoteEvent(msg.LamportTimestamp)
+	if node.State == HELD || (node.State == WANTED && !node.HasHigherPriority(msg)) {
+		node.Queue.Enqueue(msg.GetProcessId())
 	} else {
 		//timestamp when replying to the message i.e. on method return
-		timestamp = server.LocalEvent()
-		server.OutClients[msg.GetProcessId()].Reply(ctx, &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: server.Id})
+		timestamp = node.LocalEvent()
+		node.OutClients[msg.GetProcessId()].Reply(ctx, &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.Id})
 	}
 	return nil, nil
 }
 
 // Reply is the logic that happens within the Node, when it receives a Reply rpc call. To be called within Request method
-func (server *Node) Reply(ctx context.Context, msg *proto.LamportMessage) (*proto.Empty, error) {
-	server.RemoteEvent(msg.LamportTimestamp)
-	server.Replies[msg.ProcessId] <- true
+func (node *Node) Reply(ctx context.Context, msg *proto.LamportMessage) (*proto.Empty, error) {
+	node.RemoteEvent(msg.LamportTimestamp)
+	node.Replies[msg.ProcessId] <- true
 	return nil, nil
 }
 
-func (server *Node) Enter() {
-	server.State = WANTED
+func (node *Node) Enter() {
+	node.State = WANTED
 	//timestamp the sending of request messages. Note all messages have the same timestamp as sending this bundle of
 	//requests is seen as one event.
-	timestamp := server.LocalEvent()
-	msg := &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: server.Id} //the message to be sent
-	for _, client := range server.OutClients {
+	timestamp := node.LocalEvent()
+	msg := &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.Id} //the message to be sent
+	for _, client := range node.OutClients {
 		client.Request(context.Background(), msg)
 	}
 	//wait for n-1 replies
 	wg := sync.WaitGroup{}
-	for _, v := range server.Replies {
+	for _, v := range node.Replies {
 		wg.Go(func() {
 			<-v
 		})
 	}
 	wg.Wait()
-	//set state to held as the nodeServer has now gotten a reply from all other nodes' server which by Ricart-Agrawala
+	//set state to held as the nodeServer has now gotten a reply from all other nodes' node which by Ricart-Agrawala
 	//algorithm means only this process is in the critical section.
-	server.State = HELD
+	node.State = HELD
+	//call the critical section
+	node.CriticalSection()
 }
 
-func (server *Node) Exit() {
-	server.State = RELEASED
-	//TODO dequeue and reply to each until queue is empty
+func (node *Node) Exit() {
+	node.State = RELEASED
+	timestamp := node.LocalEvent()
+	msg := &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.Id}
+	for {
+		if node.Queue.IsEmpty() {
+			return
+		}
+		client := node.OutClients[node.Queue.Dequeue()]
+		client.Request(context.Background(), msg)
+	}
 }
 func main() {
 	//start server
 
+	//input of command
+
+	//-flag
+	//--flag   // double dashes are also permitted
+	//-flag=x
+
+	port := flag.Int64("port", 8080, "Input port for the server to start on. Note, port is also its id")
+	//id := flag.Int64("id", 0, "Id for the server to start on")
+	flag.Parse()
+
+	node := CreateNodeServer(*port)
+
 	//do internal logic
+	go func() {
+		err := node.InputHandler()
+		if err != nil {
+			log.Println(err)
+		}
+	}()
+
+	//todo internal logic. probably put some time.wait statements
+
+	//TODO refactor
+	for {
+		//infinite loop to prevent premature return on main
+	}
 }
-func (server *Node) StartServer(port int64) {
+
+// InputHandler is meant to be called as a go routine, which will handle all CLI inputs, such as connecting to other servers
+func (node *Node) InputHandler() error {
+	//TODO connect to the other nodes
+	//regex, _ := regexp.Compile(--connect *(?'port'\d{4})) //expect a four digit port number
+
+	for {
+		reader := bufio.NewReader(os.Stdin)
+		msg, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		if strings.Contains(msg, "--connect") {
+
+		}
+
+	}
+	return nil
+}
+
+func (node *Node) CriticalSection() {
+	fmt.Printf("In critical section with client [%v]", node.Id)
+	node.Exit()
+}
+
+func (node *Node) StartServer(port int64) {
 	grpcServer := grpc.NewServer()
 	lis, err := net.Listen("tcp", ":"+strconv.FormatInt(port, 10))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
-	proto.RegisterNodeServer(grpcServer, server)
+	proto.RegisterNodeServer(grpcServer, node)
 	err = grpcServer.Serve(lis)
 	if err != nil {
 		log.Fatalf("failed to serve: %v", err)
@@ -102,41 +168,42 @@ func CreateNodeServer(id int64) Node {
 		OutClients: make(map[int64]proto.NodeClient),
 		Timestamp:  make(chan int64, 1),
 		Replies:    make(map[int64]chan bool, 1),
-		State:      RELEASED}
+		State:      RELEASED,
+		Queue:      queue.Queue{}}
 	return out
 }
 
 // ConnectToNodeServer connects this Node to another Node by creating a new connection and client to that
 // Node's server
-func (server *Node) ConnectToNodeServer(port int64) {
-	server.LocalEvent()
+func (node *Node) ConnectToNodeServer(port int64) {
+	node.LocalEvent()
 	conn, err := grpc.NewClient("localhost:" + strconv.FormatInt(port, 10))
 	if err != nil {
 		log.Fatalf("failed to connect: %v", err)
 	}
 	client := proto.NewNodeClient(conn)
-	server.OutClients[port] = client
+	node.OutClients[port] = client
 }
 
 // LocalEvent updates the Timestamp by incrementing it by 1
-func (server *Node) LocalEvent() int64 {
-	newTimestamp := <-server.Timestamp + 1
-	server.Timestamp <- newTimestamp
+func (node *Node) LocalEvent() int64 {
+	newTimestamp := <-node.Timestamp + 1
+	node.Timestamp <- newTimestamp
 	return newTimestamp
 }
 
 // RemoteEvent updates the Timestamp by setting it to one greater than the maximum of the current Timestamp and the parameter provided timestamp
-func (server *Node) RemoteEvent(timestamp int64) int64 {
-	newTimestamp := max(<-server.Timestamp, timestamp) + 1
-	server.Timestamp <- newTimestamp
+func (node *Node) RemoteEvent(timestamp int64) int64 {
+	newTimestamp := max(<-node.Timestamp, timestamp) + 1
+	node.Timestamp <- newTimestamp
 	return newTimestamp
 }
 
-func (server *Node) HasHigherPriority(msg *proto.LamportMessage) bool {
-	//get the timestamp of the server, without incrementing it
-	timestamp := <-server.Timestamp
-	server.Timestamp <- timestamp
-	if timestamp < msg.GetLamportTimestamp() || (timestamp == msg.GetLamportTimestamp()) && server.Id < msg.ProcessId {
+func (node *Node) HasHigherPriority(msg *proto.LamportMessage) bool {
+	//get the timestamp of the node, without incrementing it
+	timestamp := <-node.Timestamp
+	node.Timestamp <- timestamp
+	if timestamp < msg.GetLamportTimestamp() || (timestamp == msg.GetLamportTimestamp()) && node.Id < msg.ProcessId {
 		return true
 	}
 	return false
