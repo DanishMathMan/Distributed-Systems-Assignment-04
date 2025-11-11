@@ -8,6 +8,7 @@ import (
 type LogStruct struct {
 	Timestamp  int64
 	Identifier int64 // identifier is the processe's port number
+	Message    string
 }
 
 // LogAsJson logs a log struct as a json string to the standard logger which in our case is the log file

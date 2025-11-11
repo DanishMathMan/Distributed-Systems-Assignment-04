@@ -24,46 +24,57 @@ import (
 
 type Node struct {
 	proto.UnimplementedNodeServer
-	//OutClients are the clients this Node has to the other Nodes' servers.
+	// OutClients are the clients this Node has to the other Nodes' servers.
 	//Key corresponds to the port and id of the process the client connects to. This means lower port equals higher priority
 	OutClients map[int64]proto.NodeClient
-	Timestamp  chan int64
-	Id         int64
+	Timestamp  chan int64 // Timestamp is a channel, which is meant to be 1 buffered, to prevent other threads from introducing race conditions
+	PortId     int64      // PortId is both the port at which this Node's server is listening and the Node's id.
 	State      State
-	Replies    map[int64]chan bool
-	Queue      queue.Queue
-	Start      chan bool
+	Replies    map[int64]chan bool // Replies maps PortId's to channels indicating a response. Should be 1 buffered.
+	Queue      queue.Queue         // Queue is a simple FIFO queue of PortId's, the order of which this Node should reply to requests, when exiting CS
+	Start      chan bool           // Start is a simple channel to indicate whether the channel may start attempting to enter the CS
 }
 
+// State represents the Node's relationship to the critical section.
 type State int
 
 const (
-	HELD     State = 1
+	// HELD indicates it is holding the critical section and by extension no other Node has the critical section
+	HELD State = 1
+	// RELEASED Node neither wants the critical section, nor does it currently hold it.
 	RELEASED State = 2
-	WANTED   State = 3
+	// WANTED indicates the channel wants to access the critical section, but does not currently hold it.
+	WANTED State = 3
 )
 
 // Request is the logic that happens within Node, when it receives a Request rpc call. To be called within Enter method
 func (node *Node) Request(ctx context.Context, msg *proto.LamportMessage) (*proto.Empty, error) {
 	//timestamp at the receival of a request
 	timestamp := node.RemoteEvent(msg.LamportTimestamp)
+	utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: msg.GetProcessId(), Message: "Receive Request from [Identifier]"}, true)
 	if node.State == HELD || (node.State == WANTED && !node.HasHigherPriority(msg)) {
 		node.Queue.Enqueue(msg.GetProcessId())
 	} else {
 		//timestamp when replying to the message i.e. on method return
 		timestamp = node.LocalEvent()
-		_, err := node.OutClients[msg.GetProcessId()].Reply(ctx, &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.Id})
+		_, err := node.OutClients[msg.GetProcessId()].Reply(ctx, &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.PortId})
 		if err != nil {
-			log.Fatalln(err)
+			utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: msg.GetProcessId(), Message: "Error when replying to [Identifier]: " + err.Error()}, false)
+			log.Println("]")
+			os.Exit(1)
 			return nil, err
 		}
 	}
 	return &proto.Empty{}, nil
 }
 
-// Reply is the logic that happens within the Node, when it receives a Reply rpc call. To be called within Request method
+// Reply is the logic that happens within the Node, when it receives a Reply rpc call.
+// To be called within Request method or on Exit call, replying to every Node in its Queue
 func (node *Node) Reply(ctx context.Context, msg *proto.LamportMessage) (*proto.Empty, error) {
-	node.RemoteEvent(msg.LamportTimestamp)
+	// Timestamp the event of receiving the reply from the Node that called Reply rpc to this Node
+	timestamp := node.RemoteEvent(msg.LamportTimestamp)
+	utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: msg.ProcessId, Message: "Received Reply from [Identifier]"}, true)
+	// The Node now records whom it got a reply from
 	node.Replies[msg.ProcessId] <- true
 	return &proto.Empty{}, nil
 }
@@ -86,10 +97,12 @@ func (node *Node) Enter() {
 	//timestamp the sending of request messages. Note all messages have the same timestamp as sending this bundle of
 	//requests is seen as one event.
 	timestamp := node.LocalEvent()
-	msg := &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.Id} //the message to be sent
+	msg := &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.PortId} //the message to be sent
+	utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: node.PortId, Message: "Send Requests"}, true)
 	for _, client := range node.OutClients {
 		_, err := client.Request(context.Background(), msg)
 		if err != nil {
+			utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: node.PortId, Message: err.Error()}, true)
 			return
 		}
 	}
@@ -108,16 +121,24 @@ func (node *Node) Enter() {
 	node.CriticalSection()
 }
 
+/*
+Exit is called when the Node exits the critical section, replying to every Nodes' request in FIFO order.
+To be called in CriticalSection method.
+*/
 func (node *Node) Exit() {
 	node.State = RELEASED
 	timestamp := node.LocalEvent()
-	msg := &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.Id}
+	utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: node.PortId, Message: "Releasing critical section and replying to queue"}, true)
+	msg := &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.PortId}
 	for {
 		if node.Queue.IsEmpty() {
 			return
 		}
 		client := node.OutClients[node.Queue.Dequeue()]
-		client.Request(context.Background(), msg)
+		_, err := client.Request(context.Background(), msg)
+		if err != nil {
+			utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: node.PortId, Message: err.Error()}, true)
+		}
 	}
 }
 func main() {
@@ -135,37 +156,33 @@ func main() {
 	}
 	log.SetFlags(0)
 	log.SetOutput(f)
-
+	log.Println("[")
 	node := CreateNodeServer(*port)
-	go node.StartServer(node.Id)
+	go node.StartServer(node.PortId)
 	//do internal logic
 	go func() {
-		err := node.InputHandler()
+		err = node.InputHandler()
 		if err != nil {
-			log.Println(err)
+			utility.LogAsJson(utility.LogStruct{Timestamp: node.GetTimestamp(), Identifier: node.PortId, Message: err.Error()}, true)
 		}
 	}()
 
 	go func() {
 		<-node.Start
 		for {
-			// TODO change >= to >
 			if len(node.OutClients) >= 1 {
 				time.Sleep(1 * time.Second)
+				utility.LogAsJson(utility.LogStruct{Timestamp: node.GetTimestamp(), Identifier: node.PortId, Message: "Call Enter"}, true)
 				node.Enter()
 			}
 		}
 	}()
 
-	//TODO refactor
-	for {
-		//infinite loop to prevent premature return on main
-	}
+	select {}
 }
 
 // InputHandler is meant to be called as a go routine, which will handle all CLI inputs, such as connecting to other servers
 func (node *Node) InputHandler() error {
-	//TODO connect to the other nodes
 	regex := regexp.MustCompile("(?:--connect|-c) *(?P<port>\\d{4})") //expect a four digit port number
 	regex2 := regexp.MustCompile("--start")
 
@@ -173,13 +190,13 @@ func (node *Node) InputHandler() error {
 		reader := bufio.NewReader(os.Stdin)
 		msg, err := reader.ReadString('\n')
 		if err != nil {
-			log.Println(err)
+			utility.LogAsJson(utility.LogStruct{Timestamp: node.GetTimestamp(), Identifier: node.PortId, Message: err.Error()}, true)
 			continue
 		}
 		match := regex.FindStringSubmatch(msg)
 		match2 := regex2.FindStringSubmatch(msg)
 		if match == nil && match2 == nil {
-			log.Println("Invalid input: " + strings.Split(msg, "\n")[0])
+			utility.LogAsJson(utility.LogStruct{Timestamp: node.GetTimestamp(), Identifier: node.PortId, Message: "Invalid input: " + strings.Split(msg, "\n")[0]}, true)
 			continue
 		}
 
@@ -191,7 +208,7 @@ func (node *Node) InputHandler() error {
 		port, _ := strconv.ParseInt(match[1], 10, 64)
 		err = node.ConnectToNodeServer(port)
 		if err != nil {
-			log.Println(err)
+			utility.LogAsJson(utility.LogStruct{Timestamp: node.GetTimestamp(), Identifier: node.PortId, Message: err.Error()}, true)
 			continue
 		}
 	}
@@ -199,8 +216,8 @@ func (node *Node) InputHandler() error {
 
 func (node *Node) CriticalSection() {
 	timestamp := node.LocalEvent()
-	fmt.Printf("In critical section with client [%v] at timestamp %v\n", node.Id, timestamp)
-	utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: node.Id}, true)
+	fmt.Printf("In critical section with client [%v] at timestamp %v\n", node.PortId, timestamp)
+	utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: node.PortId, Message: "In Critical Section"}, true)
 	node.Exit()
 }
 
@@ -208,18 +225,22 @@ func (node *Node) StartServer(port int64) {
 	grpcServer := grpc.NewServer()
 	lis, err := net.Listen("tcp", ":"+strconv.FormatInt(port, 10))
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		utility.LogAsJson(utility.LogStruct{Timestamp: 0, Identifier: node.PortId, Message: "Failed to listen. Error: " + err.Error()}, true)
+		log.Println("]")
+		os.Exit(1)
 	}
 	proto.RegisterNodeServer(grpcServer, node)
 	err = grpcServer.Serve(lis)
 	if err != nil {
-		log.Fatalf("failed to serve: %v", err)
+		utility.LogAsJson(utility.LogStruct{Timestamp: 0, Identifier: node.PortId, Message: "Failed to serve. Error: " + err.Error()}, true)
+		log.Println("]")
+		os.Exit(1)
 	}
 }
 
 func CreateNodeServer(id int64) Node {
 	out := Node{
-		Id:         id,
+		PortId:     id,
 		OutClients: make(map[int64]proto.NodeClient),
 		Timestamp:  make(chan int64, 1),
 		Replies:    make(map[int64]chan bool, 1),
@@ -252,6 +273,13 @@ func (node *Node) ConnectToNodeServer(port int64) error {
 	return nil
 }
 
+// GetTimestamp returns the current timestamp without incrementing it
+func (node *Node) GetTimestamp() int64 {
+	timestamp := <-node.Timestamp
+	node.Timestamp <- timestamp
+	return timestamp
+}
+
 // LocalEvent updates the Timestamp by incrementing it by 1
 func (node *Node) LocalEvent() int64 {
 	newTimestamp := <-node.Timestamp + 1
@@ -266,11 +294,13 @@ func (node *Node) RemoteEvent(timestamp int64) int64 {
 	return newTimestamp
 }
 
+// HasHigherPriority checks whether the Node or the Node which sent the LamportMessage has priority according to
+// the Ricart-Agrawala algorithm.
 func (node *Node) HasHigherPriority(msg *proto.LamportMessage) bool {
 	//get the timestamp of the node, without incrementing it
 	timestamp := <-node.Timestamp
 	node.Timestamp <- timestamp
-	if timestamp < msg.GetLamportTimestamp() || (timestamp == msg.GetLamportTimestamp()) && node.Id < msg.ProcessId {
+	if timestamp < msg.GetLamportTimestamp() || (timestamp == msg.GetLamportTimestamp()) && node.PortId < msg.ProcessId {
 		return true
 	}
 	return false
