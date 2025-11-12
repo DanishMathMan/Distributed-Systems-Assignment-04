@@ -57,6 +57,7 @@ func (node *Node) Request(ctx context.Context, msg *proto.LamportMessage) (*prot
 	} else {
 		//timestamp when replying to the message i.e. on method return
 		timestamp = node.LocalEvent()
+		utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: msg.GetProcessId(), Message: "Send reply to [Identifier]"}, true)
 		_, err := node.OutClients[msg.GetProcessId()].Reply(ctx, &proto.LamportMessage{LamportTimestamp: timestamp, ProcessId: node.PortId})
 		if err != nil {
 			utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: msg.GetProcessId(), Message: "Error when replying to [Identifier]: " + err.Error()}, false)
@@ -134,7 +135,9 @@ func (node *Node) Exit() {
 		if node.Queue.IsEmpty() {
 			return
 		}
-		client := node.OutClients[node.Queue.Dequeue()]
+		clientPort := node.Queue.Dequeue()
+		utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: clientPort, Message: "Send Reply to [Identifier]"}, true)
+		client := node.OutClients[clientPort]
 		_, err := client.Request(context.Background(), msg)
 		if err != nil {
 			utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: node.PortId, Message: err.Error()}, true)
