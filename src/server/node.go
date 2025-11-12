@@ -52,7 +52,7 @@ func (node *Node) Request(ctx context.Context, msg *proto.LamportMessage) (*prot
 	//timestamp at the receival of a request
 	timestamp := node.RemoteEvent(msg.LamportTimestamp)
 	utility.LogAsJson(utility.LogStruct{Timestamp: timestamp, Identifier: msg.GetProcessId(), Message: "Receive Request from [Identifier]"}, true)
-	if node.State == HELD || (node.State == WANTED && !node.HasHigherPriority(msg)) {
+	if node.State == HELD || (node.State == WANTED && node.HasHigherPriority(msg)) {
 		node.Queue.Enqueue(msg.GetProcessId())
 	} else {
 		//timestamp when replying to the message i.e. on method return
@@ -297,9 +297,7 @@ func (node *Node) RemoteEvent(timestamp int64) int64 {
 // HasHigherPriority checks whether the Node or the Node which sent the LamportMessage has priority according to
 // the Ricart-Agrawala algorithm.
 func (node *Node) HasHigherPriority(msg *proto.LamportMessage) bool {
-	//get the timestamp of the node, without incrementing it
-	timestamp := <-node.Timestamp
-	node.Timestamp <- timestamp
+	timestamp := node.GetTimestamp()
 	if timestamp < msg.GetLamportTimestamp() || (timestamp == msg.GetLamportTimestamp()) && node.PortId < msg.ProcessId {
 		return true
 	}
