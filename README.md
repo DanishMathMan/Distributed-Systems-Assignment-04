@@ -16,7 +16,7 @@
    ```go run node.go --port <port>```
    e.x: ```go run node.go --port 8080```
 3. Repeat step 1 and 2 in a new terminal as many times as you want nodes, each with a different port.
-4. Connect to other nodes' servers by writing in the command line. **Note** only a 4 digit port is accepted:
+4. Connect to other nodes' servers by writing in the command line. **Note** only a 4 digit port is accepted:\
 ``` --connect <port>``` or ```-c <port>```
 5. Repeat step 4 for each port to connect to for each node terminal opened.
 6. To start the Ricart-Agrawala algorithm, write for each node terminal open:
